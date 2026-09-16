@@ -16,7 +16,7 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
-echo [OK] Python found
+for /f "tokens=*" %%i in ('python --version 2^>^&1') do echo [OK] Python found - %%i
 echo.
 
 :: Clean old builds
@@ -26,8 +26,10 @@ echo [OK] Cleaned old builds
 echo.
 
 :: Install PyInstaller
+:: 注意：必须用 "python -m pip" 而不是直接 pip.exe。直接调用 pip 时，它绑定的可能
+:: 是另一个（已卸载/损坏的）Python 安装，会出现 "Unable to create process" 报错。
 echo Installing PyInstaller...
-pip install pyinstaller -q
+python -m pip install pyinstaller -q
 if errorlevel 1 (
     echo [ERROR] Failed to install PyInstaller
     pause
@@ -38,13 +40,13 @@ echo.
 
 :: Install dependencies
 echo Installing dependencies...
-pip install -r requirements.txt -q
+python -m pip install -r requirements.txt -q
 echo [OK] Dependencies installed
 echo.
 
 :: Run PyInstaller
 echo Packaging... This may take a few minutes.
-pyinstaller --clean publish-helper.spec
+python -m PyInstaller --clean publish-helper.spec
 if errorlevel 1 (
     echo [ERROR] Packaging failed!
     pause
