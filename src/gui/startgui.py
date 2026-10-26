@@ -8,13 +8,18 @@ import webbrowser
 import pyperclip
 from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtGui import QIcon
-from PyQt6.QtWidgets import QMainWindow, QApplication, QDialog, QInputDialog, QMessageBox, QWidget, QLineEdit
+from PyQt6.QtWidgets import (
+    QMainWindow, QApplication, QDialog, QInputDialog, QMessageBox, QWidget,
+    QLineEdit, QComboBox, QLabel, QPushButton, QHBoxLayout, QVBoxLayout,
+    QFormLayout, QDialogButtonBox,
+)
 
 from src.api.startapi import start_api
 from src.core.autofeed import get_auto_feed_link
 from src.core.mediainfo import get_media_info
 from src.core.picturebed import upload_picture
 from src.core.ptgen import get_pt_gen_description
+from src.core.platforms import get_platform, load_platforms, save_platform_templates
 from src.core.rename import get_pt_gen_info, get_video_info, get_name_from_template, rename_file, rename_folder, \
     move_file_to_folder, create_hard_link
 from src.core.screenshot import get_screenshot, get_thumbnail
@@ -44,6 +49,53 @@ def start_gui():
 
 def git_clicked():
     webbrowser.open('https://github.com/bjdbjd/publish-helper')
+
+
+def get_platform_media_info(file_path, platform):
+    if not platform:
+        return ''
+    success, media_info = get_media_info(file_path)
+    return media_info if success else ''
+
+
+class PlatformRulesDialog(QDialog):
+    def __init__(self, platform, media_type, parent=None):
+        super().__init__(parent)
+        self.platform, profile = get_platform(platform)
+        self.templates = dict(profile['templates'])
+        self.setWindowTitle(f'{self.platform} 平台命名规则')
+        self.resize(850, 240)
+        layout = QVBoxLayout(self)
+        help_text = QLabel('留空时继承通用模板。支持 {platform}、{source} 等占位符；保存后下次生成名称时生效。')
+        help_text.setWordWrap(True)
+        layout.addWidget(help_text)
+        form = QFormLayout()
+        self.fields = {}
+        for kind, title in [('file_name', '文件 / 文件夹名'), ('main_title', '主标题'), ('second_title', '副标题')]:
+            key = f'{kind}_{media_type}'
+            field = QLineEdit(self.templates.get(key, ''))
+            field.setPlaceholderText(get_settings(key))
+            self.fields[key] = field
+            form.addRow(title, field)
+        layout.addLayout(form)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.save_rules)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def save_rules(self):
+        templates = dict(self.templates)
+        for key, field in self.fields.items():
+            if field.text().strip():
+                templates[key] = field.text().strip()
+            else:
+                templates.pop(key, None)
+        try:
+            save_platform_templates(self.platform, templates)
+        except (ValueError, OSError) as error:
+            QMessageBox.warning(self, '保存失败', str(error))
+            return
+        self.accept()
 
 
 class mainwindow(QMainWindow, Ui_Mainwindow):
@@ -82,6 +134,7 @@ class mainwindow(QMainWindow, Ui_Mainwindow):
         self.debugBrowserMovie.setText('')
         self.initialize_team_combobox()
         self.initialize_source_combobox()
+        self.initialize_platform_comboboxes()
         self.initialize_playlet_source_combobox()
         self.initialize_season_box()
         self.torrent_url = ''
@@ -153,6 +206,45 @@ class mainwindow(QMainWindow, Ui_Mainwindow):
             self.debugBrowserMovie.append(f'获取资源来源信息出错：{data[0]}')
             self.debugBrowserTV.append(f'获取资源来源信息出错：{data[0]}')
             self.debugBrowserPlaylet.append(f'获取资源来源信息出错：{data[0]}')
+
+    def initialize_platform_comboboxes(self):
+        try:
+            platforms = load_platforms()
+        except ValueError as error:
+            QMessageBox.warning(self, '平台配置错误', str(error))
+            platforms = {}
+        for suffix, media_type, layout in [
+            ('Movie', 'movie', self.verticalLayout_10),
+            ('TV', 'tv', self.verticalLayout_35),
+            ('Playlet', 'playlet', self.verticalLayout_15),
+        ]:
+            row = QHBoxLayout()
+            row.addWidget(QLabel('平台'))
+            combo = QComboBox(self)
+            combo.setObjectName(f'platform{suffix}')
+            combo.setEditable(True)
+            combo.addItem('')
+            combo.addItems(list(platforms))
+            combo.setPlaceholderText('通用 / 不指定平台')
+            combo.setToolTip('选择来源平台，或输入自定义平台名称；留空使用通用规则')
+            setattr(self, f'platform{suffix}', combo)
+            row.addWidget(combo)
+            button = QPushButton('命名规则…', self)
+            button.clicked.connect(
+                lambda checked=False, selector=combo, kind=media_type: self.edit_platform_rules(selector, kind)
+            )
+            row.addWidget(button)
+            layout.insertLayout(0, row)
+
+    def edit_platform_rules(self, selector, media_type):
+        if not selector.currentText().strip():
+            QMessageBox.information(self, '平台命名规则', '请先选择或输入平台名称。')
+            return
+        try:
+            dialog = PlatformRulesDialog(selector.currentText(), media_type, self)
+            dialog.exec()
+        except (ValueError, OSError) as error:
+            QMessageBox.warning(self, '平台配置错误', str(error))
 
     def initialize_playlet_source_combobox(self):
         get_data_success, data = get_combo_box_data('playlet-source')
@@ -722,19 +814,22 @@ class mainwindow(QMainWindow, Ui_Mainwindow):
                                                         video_format, source, video_codec, bit_depth, hdr_format,
                                                         frame_rate, audio_codec, channels, audio_num, team,
                                                         other_titles, '', '', '',
-                                                        categories, actors, 'main_title_movie')
+                                                        categories, actors, 'main_title_movie',
+                                                        platform=self.platformMovie.currentText())
                     print(f'main_title: {main_title}')
                     second_title = get_name_from_template(english_title, original_title, '', '', year,
                                                           video_format, source, video_codec, bit_depth, hdr_format,
                                                           frame_rate, audio_codec, channels, audio_num, team,
                                                           other_titles, '', '', '',
-                                                          categories, actors, 'second_title_movie')
+                                                          categories, actors, 'second_title_movie',
+                                                          platform=self.platformMovie.currentText(),
+                                                          media_info=get_platform_media_info(video_path, self.platformMovie.currentText()))
                     print(f'second_title: {second_title}')
                     file_name = get_name_from_template(english_title, original_title, '', '', year,
                                                        video_format, source, video_codec, bit_depth, hdr_format,
                                                        frame_rate, audio_codec, channels, audio_num, team, other_titles,
                                                        '', '', '', categories,
-                                                       actors, 'file_name_movie')
+                                                       actors, 'file_name_movie', platform=self.platformMovie.currentText())
                     print(f'file_name: {file_name}')
                     if second_confirm_file_name:
                         text, ok = QInputDialog.getText(self, '确认', '请确认文件名称，如有问题请修改',
@@ -1452,19 +1547,20 @@ class mainwindow(QMainWindow, Ui_Mainwindow):
                                                         video_format, source, video_codec, bit_depth, hdr_format,
                                                         frame_rate, audio_codec, channels, audio_num, team,
                                                         other_titles, season_number, total_episodes, '',
-                                                        categories, actors, 'main_title_tv')
+                                                        categories, actors, 'main_title_tv', platform=self.platformTV.currentText())
                     print(f'main_title: {main_title}')
                     second_title = get_name_from_template(english_title, original_title, season, '', year,
                                                           video_format, source, video_codec, bit_depth, hdr_format,
                                                           frame_rate, audio_codec, channels, audio_num, team,
                                                           other_titles, season_number, total_episodes, '',
-                                                          categories, actors, 'second_title_tv')
+                                                          categories, actors, 'second_title_tv', platform=self.platformTV.currentText(),
+                                                          media_info=get_platform_media_info(video_path, self.platformTV.currentText()))
                     print(f'second_title: {second_title}')
                     file_name = get_name_from_template(english_title, original_title, season, '{集数}', year,
                                                        video_format, source, video_codec, bit_depth, hdr_format,
                                                        frame_rate, audio_codec, channels, audio_num, team, other_titles,
                                                        season_number, total_episodes, '', categories,
-                                                       actors, 'file_name_tv')
+                                                       actors, 'file_name_tv', platform=self.platformTV.currentText())
                     print(f'file_name: {file_name}')
                     if second_confirm_file_name:
                         text, ok = QInputDialog.getText(self, '确认',
@@ -1978,20 +2074,22 @@ class mainwindow(QMainWindow, Ui_Mainwindow):
                                                         video_format, source, video_codec, bit_depth, hdr_format,
                                                         frame_rate, audio_codec, channels, audio_num, team, '',
                                                         season_number, total_episodes, playlet_source, categories,
-                                                        '', 'main_title_playlet')
+                                                        '', 'main_title_playlet', platform=self.platformPlaylet.currentText())
                     print(f'main_title: {main_title}')
                     second_title = get_name_from_template(english_title, original_title, season, '', year,
                                                           video_format, source, video_codec, bit_depth, hdr_format,
                                                           frame_rate, audio_codec, channels, audio_num, team,
                                                           '', season_number, total_episodes, playlet_source,
-                                                          categories, '', 'second_title_playlet')
+                                                          categories, '', 'second_title_playlet',
+                                                          platform=self.platformPlaylet.currentText(),
+                                                          media_info=get_platform_media_info(video_path, self.platformPlaylet.currentText()))
                     print(f'second_title: {second_title}')
                     # NPC我要跟你谈恋爱 | 全95集 | 2023年 | 网络收费短剧 | 类型：剧集 爱情
                     file_name = get_name_from_template(english_title, original_title, season, '{集数}', year,
                                                        video_format, source, video_codec, bit_depth, hdr_format,
                                                        frame_rate, audio_codec, channels, audio_num, team, '',
                                                        season_number, total_episodes, playlet_source, categories,
-                                                       '', 'file_name_playlet')
+                                                       '', 'file_name_playlet', platform=self.platformPlaylet.currentText())
                     print(f'file_name: {file_name}')
                     if second_confirm_file_name:
                         text, ok = QInputDialog.getText(self, '确认',

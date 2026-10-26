@@ -53,6 +53,7 @@ temp/
 # Configuration (but keep examples)
 .env
 static/settings.json
+static/platforms.json
 
 # PyInstaller
 *.manifest

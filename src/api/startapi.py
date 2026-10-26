@@ -7,6 +7,8 @@ from flask_cors import CORS
 from src.core.mediainfo import get_media_info
 from src.core.picturebed import upload_picture
 from src.core.ptgen import get_pt_gen_description
+from src.core.platforms import get_platform, load_platforms, normalize_platform_source
+from src.core.release_metadata import append_quality_note
 from src.core.rename import get_video_info, get_pt_gen_info, get_name_from_template, rename_file, rename_folder, \
     move_file_to_folder, create_hard_link
 from src.core.screenshot import get_screenshot, get_thumbnail
@@ -933,12 +935,16 @@ def api_get_name_from_template():
         playlet_source = request.args.get('playletSource', default='', type=str)
         category = request.args.get('category', default='', type=str)
         actors = request.args.get('actors', default='', type=str)
-        english_title = delete_season_number(english_title, season_number)
+        if season_number:
+            english_title = delete_season_number(english_title, season_number)
 
         name = get_name_from_template(english_title, original_title, season, '{集数}', year, video_format,
                                       source, video_codec, bit_depth, hdr_format, frame_rate,
                                       audio_codec, channels, audio_num, team, other_titles, season_number,
-                                      total_episode, playlet_source, category, actors, template)
+                                      total_episode, playlet_source, category, actors, template,
+                                      platform=request.args.get('platform', default='', type=str),
+                                      quality_summary=request.args.get('qualitySummary', default='', type=str),
+                                      media_info=request.args.get('mediaInfo', default='', type=str))
         print(f'获取到名称是{name}')
         return jsonify({
             'data': {
@@ -955,6 +961,14 @@ def api_get_name_from_template():
             'message': f'获取名称失败：{e}',
             'statusCode': 'GENERAL_ERROR'
         }), 500
+
+
+@api.route('/api/getPlatforms', methods=['GET'])
+def api_get_platforms():
+    try:
+        return jsonify({'data': {'platforms': load_platforms()}, 'statusCode': 'OK'})
+    except ValueError as error:
+        return jsonify({'data': {}, 'message': str(error), 'statusCode': 'GENERAL_ERROR'}), 400
 
 
 @api.route('/api/renameFolder', methods=['POST'])
@@ -1891,6 +1905,7 @@ def api_auto_handle_movie():
         path = request.args.get('path', default='', type=str)  # 必须信息
         source = request.args.get('source', default='', type=str)  # 必须信息
         team = request.args.get('team', default='', type=str)  # 必须信息
+        platform = get_platform(request.args.get('platform', default='', type=str))[0]
         category = request.args.get('category', default='', type=str)  # 必须信息
         season = request.args.get('season', default='1', type=str)
         episodes_start_number = request.args.get('episodesStartNumber', default='1', type=str)
@@ -2018,7 +2033,7 @@ def api_auto_handle_movie():
             torrent_file_url='/api/getFile?filePath=',
             video_codec='',
             video_format='', )
-        data_instance.source = source
+        data_instance.source = normalize_platform_source(platform, source)
         data_instance.team = team
         if category == 'Movie':
             data_instance.category = '电影'
@@ -2245,7 +2260,7 @@ def api_auto_handle_movie():
                                                           data_instance.audio_codec, data_instance.channels,
                                                           data_instance.audio_num, data_instance.team, other_titles,
                                                           season_number,
-                                                          total_episodes, '', categories, actors, template)
+                                                          total_episodes, '', categories, actors, template, platform=platform)
         print(f'获取到主标题是{data_instance.main_title}')
 
         # 获取副标题
@@ -2258,7 +2273,7 @@ def api_auto_handle_movie():
                                                             data_instance.audio_codec, data_instance.channels,
                                                             data_instance.audio_num, data_instance.team, other_titles,
                                                             season_number,
-                                                            total_episodes, '', categories, actors, template)
+                                                            total_episodes, '', categories, actors, template, platform=platform)
         print(f'获取到副标题是{data_instance.second_title}')
 
         # 获取文件名
@@ -2271,7 +2286,7 @@ def api_auto_handle_movie():
                                                          data_instance.audio_codec, data_instance.channels,
                                                          data_instance.audio_num, data_instance.team, other_titles,
                                                          season_number,
-                                                         total_episodes, '', categories, actors, template)
+                                                         total_episodes, '', categories, actors, template, platform=platform)
         print(f'获取到文件名是{data_instance.file_name}')
 
         if category == 'Movie':
@@ -2363,6 +2378,11 @@ def api_auto_handle_movie():
             raise ValueError(f'资源的路径不正确：{response}')
 
         print('开始分析其他关键参数')
+        if platform or request.args.get('qualitySummary'):
+            data_instance.second_title = append_quality_note(
+                data_instance.second_title, request.args.get('qualitySummary', ''),
+                data_instance.media_info, platform,
+            )
         (data_instance.imdb_url, data_instance.douban_url, data_instance.category, data_instance.area,
          data_instance.video_format,
          data_instance.audio_codec, data_instance.video_codec, data_instance.medium) \

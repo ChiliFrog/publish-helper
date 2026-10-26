@@ -41,6 +41,8 @@ class AutoPublishConfig:
     min_confidence: int = 85
     source: str = 'DSNP WEB-DL'
     team: str = 'LongWeb'
+    source_platform: str = ''
+    quality_summary: str = ''
     submit: bool = False
     auto_download: bool = False
     vt_service: str = 'DisneyPlus'
@@ -77,6 +79,8 @@ def load_config(args):
         min_confidence=int(os.environ.get('AUTO_PUBLISH_MIN_CONFIDENCE', 85)),
         source=os.environ.get('AUTO_SOURCE', 'DSNP WEB-DL'),
         team=os.environ.get('AUTO_TEAM', 'LongWeb'),
+        source_platform=os.environ.get('AUTO_SOURCE_PLATFORM', ''),
+        quality_summary=os.environ.get('AUTO_QUALITY_SUMMARY', ''),
         submit=env_bool('AUTO_SUBMIT', False) and not args.dry_run,
         auto_download=env_bool('AUTO_DOWNLOAD', False) or args.auto_download,
         vt_service=os.environ.get('AUTO_VT_SERVICE', 'DisneyPlus'),
@@ -903,10 +907,12 @@ def process_resource(config, store, row):
     )
 
     if row['kind'] == 'movie':
-        result = process_movie(best.url, str(working_path), source=config.source, team=config.team)
+        result = process_movie(best.url, str(working_path), source=config.source, team=config.team,
+                               platform=config.source_platform, quality_summary=config.quality_summary)
     else:
         season, episodes_start = parse_season_and_episode(working_path)
-        result = process_tv(best.url, str(working_path), season, episodes_start, source=config.source, team=config.team)
+        result = process_tv(best.url, str(working_path), season, episodes_start, source=config.source, team=config.team,
+                            platform=config.source_platform, quality_summary=config.quality_summary)
 
     if not result:
         raise RuntimeError('main_cli 处理失败')

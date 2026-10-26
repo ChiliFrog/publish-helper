@@ -6,6 +6,8 @@ import shutil
 
 from pymediainfo import MediaInfo
 
+from src.core.platforms import normalize_platform_source, prepare_platform_template
+from src.core.release_metadata import append_quality_note, normalize_hdr_format, resolution_from_dimensions
 from src.core.tool import get_settings, get_abbreviation, chinese_to_int
 
 
@@ -13,6 +15,25 @@ def _first_media_value(value):
     if isinstance(value, list):
         return value[0] if value else ''
     return value or ''
+
+
+def _media_value_text(value):
+    return str(_first_media_value(value) or '')
+
+
+def _normalize_main_title_separators(name):
+    protected = []
+
+    def protect(match):
+        protected.append(match.group())
+        return f'@@DOT_TOKEN_{len(protected) - 1}@@'
+
+    name = re.sub(r'\b[Hh]\.(?:264|265|266)\b', protect, name)
+    name = re.sub(r'(?<!\d)\d{1,2}\.\d{1,3}(?!\d)', protect, name)
+    name = name.replace('.', ' ')
+    for index, token in enumerate(protected):
+        name = name.replace(f'@@DOT_TOKEN_{index}@@', token)
+    return name
 
 
 def _get_audio_codec(track):
@@ -416,32 +437,30 @@ def get_video_info(file_path):
         channels = ''
         width = ''
         height = ''
+        transfer = ''
         tags = []
         audio_tracks = []
         for track in media_info.tracks:
             # 添加General信息
             if track.track_type == 'General':
-                if track.other_frame_rate:
-                    frame_rate = track.other_frame_rate[0]
+                frame_rate = _media_value_text(getattr(track, 'other_frame_rate', '')) or frame_rate
 
             # 添加Video信息
             elif track.track_type == 'Video':
-                if track.other_width:
-                    width += track.other_width[0]
-                if track.other_width:
-                    height += track.other_height[0]
-                if track.other_format:
-                    video_codec += track.other_format[0]
-                if track.other_hdr_format:
-                    hdr_format += track.other_hdr_format[0]
-                if track.other_bit_depth:
-                    bit_depth += track.other_bit_depth[0]
-                if track.writing_library:  # 判断是否为x26*重编码
-                    if 'x264' in track.writing_library:
+                width = _media_value_text(getattr(track, 'other_width', '')) or _media_value_text(getattr(track, 'width', ''))
+                height = _media_value_text(getattr(track, 'other_height', '')) or _media_value_text(getattr(track, 'height', ''))
+                video_codec = _media_value_text(getattr(track, 'other_format', '')) or _media_value_text(getattr(track, 'format', ''))
+                hdr_format = _media_value_text(getattr(track, 'other_hdr_format', '')) or _media_value_text(getattr(track, 'hdr_format', ''))
+                bit_depth = _media_value_text(getattr(track, 'other_bit_depth', ''))
+                frame_rate = _media_value_text(getattr(track, 'other_frame_rate', '')) or frame_rate
+                transfer = _media_value_text(getattr(track, 'transfer_characteristics', '')) or _media_value_text(getattr(track, 'other_transfer_characteristics', ''))
+                writing_library = _media_value_text(getattr(track, 'writing_library', ''))
+                if writing_library:
+                    if 'x264' in writing_library:
                         video_codec = 'x264'
-                    if 'x265' in track.writing_library:
+                    if 'x265' in writing_library:
                         video_codec = 'x265'
-                    if 'x266' in track.writing_library:
+                    if 'x266' in writing_library:
                         video_codec = 'x266'
 
             # 添加Audio信息
@@ -454,29 +473,27 @@ def get_video_info(file_path):
                     'channels': track_channels,
                     'bitrate': _audio_bitrate_score(track),
                 })
-                if track.other_language == 'Chinese' and '国语' not in tags:
+                language = _media_value_text(getattr(track, 'other_language', ''))
+                if language == 'Chinese' and '国语' not in tags:
                     tags.append('国语')
-                if track.other_language == 'English' and '英语' not in tags:
+                if language == 'English' and '英语' not in tags:
                     tags.append('英语')
                 audio_count += 1
 
             # 添加Text信息
             elif track.track_type == 'Text':
-                if track.other_language == 'Chinese' and '中字' not in tags:
+                language = _media_value_text(getattr(track, 'other_language', ''))
+                if language == 'Chinese' and '中字' not in tags:
                     tags.append('中字')
-                if track.other_language == 'English' and '英字' not in tags:
+                if language == 'English' and '英字' not in tags:
                     tags.append('英字')
 
-        if extract_numbers(width) > extract_numbers(height):  # 获取较长边的分辨率
-            video_format += width
-        else:
-            video_format += height
-
-        video_format = get_abbreviation(video_format)
-        # 如果没有获取到别称（通过以 ' pixels' 结尾为特征判断）
-        if video_format[-7:] == ' pixels':
-            # 自动获取默认的值
-            video_format = approximate_resolution_by_width(extract_numbers(video_format))
+        video_format = resolution_from_dimensions(width, height)
+        normalized_hdr = normalize_hdr_format(hdr_format, transfer)
+        if normalized_hdr is None:
+            normalized_hdr = get_abbreviation(hdr_format)
+            if normalized_hdr == hdr_format:
+                return False, [f'HDR格式未映射：{hdr_format}']
 
         if audio_count == 1:
             audio_num = ''
@@ -484,7 +501,7 @@ def get_video_info(file_path):
             audio_num = str(audio_count) + get_abbreviation('Audio')
         audio_codec, channels = _select_best_audio_track(audio_tracks)
         return True, [video_format, get_abbreviation(video_codec), get_abbreviation(bit_depth),
-                      get_abbreviation(hdr_format), get_abbreviation(frame_rate), get_abbreviation(audio_codec),
+                      normalized_hdr, get_abbreviation(frame_rate), get_abbreviation(audio_codec),
                       get_abbreviation(channels), audio_num, tags]
     except OSError as e:
         # 文件路径相关的错误
@@ -560,8 +577,12 @@ def extract_numbers(string):
 
 def get_name_from_template(english_title, original_title, season, episode, year, video_format, source, video_codec,
                            bit_depth, hdr_format, frame_rate, audio_codec, channels, audio_num, team, other_titles,
-                           season_number, total_episodes, playlet_source, categories, actors, template):
+                           season_number, total_episodes, playlet_source, categories, actors, template, platform='',
+                           quality_summary='', media_info=''):
     name = get_settings(template)  # 获取模板
+    source = normalize_platform_source(platform, source)
+    name, platform_token = prepare_platform_template(template, name, platform, source)
+    name = name.replace('{platform}', platform_token)
     # 开始替换关键字
     name = name.replace('{en_title}', english_title)
     name = name.replace('{original_title}', original_title)
@@ -585,6 +606,7 @@ def get_name_from_template(english_title, original_title, season, episode, year,
     name = name.replace('{categories}', categories)
     name = name.replace('{actors}', actors)
     if 'main_title' in template:
+        name = _normalize_main_title_separators(name)
         name = name.replace('_', ' ')
         name = re.sub(r'\s+', ' ', name)  # 将连续的空格变成一个
         name = re.sub(r' -', '-', name)  # 将' -'变成'-'
@@ -599,8 +621,10 @@ def get_name_from_template(english_title, original_title, season, episode, year,
         name = re.sub(r'\.{2,}', '.', name)  # 将连续的'.'变成一个
         name = re.sub(r'\.-', '-', name)  # 将'.-'变成'-'
         name = re.sub(r'\.@', '@', name)  # 将'.@'变成'@'
-    if name[0] == '.' or name[0] == ' ':
+    if name and (name[0] == '.' or name[0] == ' '):
         name = name[1:]  # 避免首字符为'.'或者' '
+    if 'second_title' in template and (platform or quality_summary):
+        name = append_quality_note(name, quality_summary, media_info, platform)
     return name
 
 

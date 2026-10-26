@@ -26,6 +26,8 @@ from src.core.mediainfo import get_media_info
 from src.core.picturebed import upload_picture
 from src.core.poster import process_poster
 from src.core.ptgen import get_pt_gen_description
+from src.core.platforms import get_platform, load_platforms, normalize_platform_source
+from src.core.release_metadata import append_quality_note
 from src.core.rename import (
     create_hard_link,
     get_name_from_template,
@@ -516,7 +518,25 @@ def process_torrent_only(video_path):
     return False
 
 
-def process_movie(resource_url, video_path, source=None, team=None):
+def select_platform():
+    platforms = list(load_platforms())
+    print('\n选择来源平台 / Platform:')
+    print('  [0] 通用 / 不指定平台')
+    for index, label in enumerate(platforms, 1):
+        print(f'  [{index}] {label}')
+    while True:
+        choice = prompt('选择数字或输入平台名称', '0').strip()
+        if choice == '0' or not choice:
+            return ''
+        if choice.isdigit():
+            if 1 <= int(choice) <= len(platforms):
+                return platforms[int(choice) - 1]
+            print_error(f'请输入 0-{len(platforms)} 之间的数字')
+        else:
+            return get_platform(choice)[0]
+
+
+def process_movie(resource_url, video_path, source=None, team=None, platform=None, quality_summary=''):
     """Process a movie with the one-key workflow."""
     total_steps = 6
 
@@ -526,6 +546,8 @@ def process_movie(resource_url, video_path, source=None, team=None):
     # Get Source and Team selections upfront unless automation supplied them.
     source = source or select_from_combo_box("来源 Source", "source")
     team = team or select_from_combo_box("制作组 Team", "team")
+    platform = select_platform() if platform is None else get_platform(platform)[0]
+    source = normalize_platform_source(platform, source)
 
     print(f"\n{Colors.GREEN}✓ 所有选择已完成，开始自动处理...{Colors.END}\n")
 
@@ -619,7 +641,7 @@ def process_movie(resource_url, video_path, source=None, team=None):
         video_format, source, video_codec, bit_depth, hdr_format,
         frame_rate, audio_codec, channels, audio_num, team,
         other_titles_str, '', '', '', categories, actors_str,
-        'file_name_movie'
+        'file_name_movie', platform=platform
     )
 
     main_title = get_name_from_template(
@@ -627,7 +649,15 @@ def process_movie(resource_url, video_path, source=None, team=None):
         video_format, source, video_codec, bit_depth, hdr_format,
         frame_rate, audio_codec, channels, audio_num, team,
         other_titles_str, '', '', '', categories, actors_str,
-        'main_title_movie'
+        'main_title_movie', platform=platform
+    )
+
+    second_title = get_name_from_template(
+        english_title, original_title, '', '', year,
+        video_format, source, video_codec, bit_depth, hdr_format,
+        frame_rate, audio_codec, channels, audio_num, team,
+        other_titles_str, '', '', '', categories, actors_str,
+        'second_title_movie', platform=platform
     )
 
     print_success(f"主标题: {main_title}")
@@ -849,10 +879,8 @@ def process_movie(resource_url, video_path, source=None, team=None):
     else:
         print_error(f"截图失败: {screenshots}")
 
+    second_title = append_quality_note(second_title, quality_summary, media_info, platform) if platform or quality_summary else second_title
     category = '电影'
-    second_title = (
-        f"{original_title} / {other_titles_str} | 类型：{categories} | 演员：{actors_str}"
-    )
     generate_auto_feed_output(
         main_title, second_title,
         description, media_info, file_name, team, source, category
@@ -885,7 +913,7 @@ def process_movie(resource_url, video_path, source=None, team=None):
     }
 
 
-def process_tv(resource_url, video_path, season, episodes_start, source=None, team=None):
+def process_tv(resource_url, video_path, season, episodes_start, source=None, team=None, platform=None, quality_summary=''):
     """Process a TV series with the one-key workflow."""
     total_steps = 6
 
@@ -895,6 +923,8 @@ def process_tv(resource_url, video_path, season, episodes_start, source=None, te
     # Get Source and Team selections upfront unless automation supplied them.
     source = source or select_from_combo_box("来源 Source", "source")
     team = team or select_from_combo_box("制作组 Team", "team")
+    platform = select_platform() if platform is None else get_platform(platform)[0]
+    source = normalize_platform_source(platform, source)
 
     print(f"\n{Colors.GREEN}✓ 所有选择已完成，开始自动处理...{Colors.END}\n")
 
@@ -1024,7 +1054,7 @@ def process_tv(resource_url, video_path, season, episodes_start, source=None, te
         frame_rate, audio_codec, channels, audio_num, team,
         other_titles_str, season_number, total_episodes, '',
         categories, actors_str,
-        'file_name_tv'
+        'file_name_tv', platform=platform
     )
 
     main_title = get_name_from_template(
@@ -1033,7 +1063,15 @@ def process_tv(resource_url, video_path, season, episodes_start, source=None, te
         frame_rate, audio_codec, channels, audio_num, team,
         other_titles_str, season_number, total_episodes, '',
         categories, actors_str,
-        'main_title_tv'
+        'main_title_tv', platform=platform
+    )
+
+    second_title = get_name_from_template(
+        english_title, original_title, season_str, '', year,
+        video_format, source, video_codec, bit_depth, hdr_format,
+        frame_rate, audio_codec, channels, audio_num, team,
+        other_titles_str, season_number, total_episodes, '', categories, actors_str,
+        'second_title_tv', platform=platform
     )
 
     print_success(f"主标题: {main_title}")
@@ -1287,10 +1325,8 @@ def process_tv(resource_url, video_path, season, episodes_start, source=None, te
     else:
         print_error(f"截图失败: {screenshots}")
 
+    second_title = append_quality_note(second_title, quality_summary, media_info, platform) if platform or quality_summary else second_title
     category = '剧集'
-    second_title = (
-        f"{original_title} / {other_titles_str} | 类型：{categories} | 演员：{actors_str}"
-    )
     generate_auto_feed_output(
         main_title, second_title,
         description, media_info, file_name, team, source, category
@@ -1325,7 +1361,8 @@ def process_tv(resource_url, video_path, season, episodes_start, source=None, te
     }
 
 
-def process_playlet(original_title, year, area, categories, language, playlet_source, video_path, season, episodes_start):
+def process_playlet(original_title, year, area, categories, language, playlet_source, video_path, season, episodes_start,
+                    platform=None, quality_summary=''):
     """Process a playlet (short drama) with the one-key workflow."""
     total_steps = 6
 
@@ -1335,6 +1372,8 @@ def process_playlet(original_title, year, area, categories, language, playlet_so
     # Get Source and Team selections upfront
     source = select_from_combo_box("来源 Source", "source")
     team = select_from_combo_box("制作组 Team", "team")
+    platform = select_platform() if platform is None else get_platform(platform)[0]
+    source = normalize_platform_source(platform, source)
 
     print(f"\n{Colors.GREEN}✓ 所有选择已完成，开始自动处理...{Colors.END}\n")
 
@@ -1417,7 +1456,7 @@ def process_playlet(original_title, year, area, categories, language, playlet_so
         frame_rate, audio_codec, channels, audio_num, team,
         other_titles_str, season_number, total_episodes, playlet_source,
         categories, actors_str,
-        'file_name_playlet'
+        'file_name_playlet', platform=platform
     )
 
     main_title = get_name_from_template(
@@ -1426,7 +1465,7 @@ def process_playlet(original_title, year, area, categories, language, playlet_so
         frame_rate, audio_codec, channels, audio_num, team,
         other_titles_str, season_number, total_episodes, playlet_source,
         categories, actors_str,
-        'main_title_playlet'
+        'main_title_playlet', platform=platform
     )
 
     second_title = get_name_from_template(
@@ -1435,7 +1474,7 @@ def process_playlet(original_title, year, area, categories, language, playlet_so
         frame_rate, audio_codec, channels, audio_num, team,
         other_titles_str, season_number, total_episodes, playlet_source,
         categories, actors_str,
-        'second_title_playlet'
+        'second_title_playlet', platform=platform
     )
 
     print_success(f"主标题: {main_title}")
@@ -1660,6 +1699,7 @@ def process_playlet(original_title, year, area, categories, language, playlet_so
     else:
         print_error(f"截图失败: {screenshots}")
 
+    second_title = append_quality_note(second_title, quality_summary, media_info, platform) if platform or quality_summary else second_title
     category = '短剧'
     generate_auto_feed_output(
         main_title, second_title,

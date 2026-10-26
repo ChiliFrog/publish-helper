@@ -9,11 +9,20 @@ import base64
 import json
 import os
 import re
+import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import unquote
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import requests
+from src.core.release_metadata import (
+    parse_overall_bitrate_mbps,
+    parse_video_frame_rate,
+    section_text,
+    split_mediainfo_sections,
+)
 
 
 TYPE_VALUES = {
@@ -145,60 +154,6 @@ def get_mediainfo_text(fields):
         if value:
             return value
     return extract_mediainfo_from_description(fields.get('descr', ''))
-
-
-def split_mediainfo_sections(media_info):
-    sections = []
-    current = None
-    lines = []
-    headings = {'general', 'video', 'menu'}
-
-    def flush():
-        if current and lines:
-            sections.append((current, '\n'.join(lines)))
-
-    for line in str(media_info or '').splitlines():
-        stripped = line.strip()
-        lower = stripped.lower()
-        is_heading = lower in headings or lower.startswith('audio') or lower.startswith('text')
-        if is_heading:
-            flush()
-            current = lower.split()[0]
-            lines = [stripped]
-            continue
-        if current:
-            lines.append(line)
-    flush()
-    return sections
-
-
-def section_text(sections, *names):
-    wanted = set(names)
-    return '\n'.join(text for name, text in sections if name in wanted)
-
-
-def parse_overall_bitrate_mbps(media_info):
-    best = 0.0
-    pattern = re.compile(r'^\s*Overall bit rate\s*:\s*([0-9][0-9 .]*)\s*([kmg]?b/s|[kmg]?bps)\b', re.IGNORECASE | re.MULTILINE)
-    for value, unit in pattern.findall(str(media_info or '')):
-        number = float(value.replace(' ', ''))
-        unit = unit.lower()
-        if unit.startswith('g'):
-            number *= 1000
-        elif unit.startswith('k'):
-            number /= 1000
-        best = max(best, number)
-    return best
-
-
-def parse_video_frame_rate(media_info):
-    sections = split_mediainfo_sections(media_info)
-    video_text = section_text(sections, 'general', 'video')
-    best = 0.0
-    pattern = re.compile(r'^\s*Frame rate\s*:\s*([0-9.]+)\s*FPS\b', re.IGNORECASE | re.MULTILINE)
-    for value in pattern.findall(video_text):
-        best = max(best, float(value))
-    return best
 
 
 def infer_mediainfo_tags(media_info):
