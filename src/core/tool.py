@@ -6,8 +6,8 @@ import os
 import random
 import re
 
+from pypinyin import lazy_pinyin, load_phrases_dict
 from torf import Torrent
-from xpinyin import Pinyin
 
 
 # 更新settings
@@ -590,13 +590,31 @@ def load_names(file_path, name):
         return data[name]
 
 
+# pypinyin 的词组词典覆盖不到姓氏等专有名词：「单」默认 dān、「曾」默认 céng、
+# 「查」默认 chá，作姓氏时应读 shàn / zēng / zhā。遇到这类专有名词标题，
+# 往这里加完整词组即可（键是整个词，值是逐字拼音，带声调）。
+CUSTOM_PINYIN_PHRASES = {
+    '单田芳': [['shàn'], ['tián'], ['fāng']],
+    '曾国藩': [['zēng'], ['guó'], ['fān']],
+    '查良镛': [['zhā'], ['liáng'], ['yōng']],
+}
+
+load_phrases_dict(CUSTOM_PINYIN_PHRASES)
+
+
+def pinyin_syllables(text):
+    """按词组上下文把中文切成拼音音节。
+
+    xpinyin 每个字只映射一个读音，会把「宝藏」读成 bao cang（藏应为 zàng）。
+    pypinyin 带词组词典，能按上下文判读多音字，所以这里统一走它。
+    """
+    return lazy_pinyin(str(text or ''))
+
+
 def chinese_name_to_pinyin(chinese_name):
-    p = Pinyin()
     result = ''
-    py = p.get_pinyin(chinese_name)
-    s = py.split('-')
-    for c in s:
-        result += c.capitalize()
+    for syllable in pinyin_syllables(chinese_name):
+        result += syllable.capitalize()
         result += ' '
     result = convert_chinese_punctuation_to_english(result)
     result = result.replace(' ,', ',')

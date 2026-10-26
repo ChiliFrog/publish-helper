@@ -7,9 +7,9 @@ block_cipher = None
 _system = platform.system()  # 'Windows' / 'Linux' / 'Darwin'
 
 # 平台相关二进制文件：
-# - Mandarin.dat 全平台都需要
 # - libmediainfo.0.dylib 仅 macOS 存在，Windows/Linux 使用各自系统的 MediaInfo 库
-binaries = [('Mandarin.dat', '.')]
+# - 原先还需打包 xpinyin 的 Mandarin.dat，改用 pypinyin（数据在模块内）后已不需要
+binaries = []
 if _system == 'Darwin':
     binaries.append(('libmediainfo.0.dylib', '.'))
 
@@ -32,7 +32,6 @@ a = Analysis(
         ('docs/requirements.txt', 'docs'),
         ('media', 'media'),
         ('temp', 'temp'),
-        ('Mandarin.dat', 'xpinyin'),
         ('LICENSE', '.'),
         ('README.md', '.'),
         ('readme.txt', '.'),
@@ -52,7 +51,7 @@ a = Analysis(
         'pymediainfo',
         'torf',
         'pyperclip',
-        'xpinyin',
+        'pypinyin',
         'click',
         'colorama',
         'dotenv',
